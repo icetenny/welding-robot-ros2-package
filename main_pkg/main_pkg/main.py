@@ -9,18 +9,6 @@ import PIL
 import PIL.Image
 import rclpy
 import rclpy.client
-from cv_bridge import CvBridge
-from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
-from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
-from moveit_msgs.srv import GetPlanningScene
-from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
-from rclpy.node import Node
-from sensor_msgs.msg import CameraInfo, Image, JointState, PointCloud2
-from shape_msgs.msg import SolidPrimitive
-from std_msgs.msg import Header, String
-from std_srvs.srv import Trigger
-from tf2_ros import Buffer, TransformException, TransformListener
-
 from custom_srv_pkg.msg import GraspPose, GraspPoses
 from custom_srv_pkg.srv import (
     AimGripPlan,
@@ -39,7 +27,19 @@ from custom_srv_pkg.srv import (
     PointCloudSend,
     PointCloudSendWithMask,
     TargetObjectSend,
+    WeldPose,
 )
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
+from moveit_msgs.srv import GetPlanningScene
+from rcl_interfaces.msg import Parameter, ParameterDescriptor, ParameterType
+from rclpy.node import Node
+from sensor_msgs.msg import CameraInfo, Image, JointState, PointCloud2
+from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import Header, String
+from std_srvs.srv import Trigger
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from .utils import fake_utils, image_utils, utils
 from .utils.my_custom_socket import MyClient
@@ -61,8 +61,7 @@ class MainNode(Node):
         self.command_map = {
             "capture": self.command_capture,
             "capture_to_fuse": self.command_capture_to_fuse,
-            "req_ism": self.command_srv_req_ism,
-            "req_pem": self.command_srv_req_pem,
+            "req_pem": self.command_weld_pose,
             "generate_all_grasp": self.command_srv_all_grasp,
             "generate_best_grasp": self.command_srv_best_grasp,
             "make_collision": self.command_srv_make_collision,
@@ -86,7 +85,6 @@ class MainNode(Node):
             "grip_and_attach": self.command_grip_and_attach,
             "republish_stl": self.call_make_stl_collision,
             "clear_planning_scene": self.command_clear_planning_scene,
-
         }
 
         """
@@ -110,6 +108,8 @@ class MainNode(Node):
 
         self.capture_to_fuse = False
         self.data_pointcloud_fused = PointCloud2()
+
+        self.data_pointcloud_wrt_cam = PointCloud2()
 
         # RGB
         self.data_msg_rgb = Image()
@@ -316,27 +316,26 @@ class MainNode(Node):
         self.client_attach = self.create_client(Trigger, "attach_collision_object")
         self.client_detach = self.create_client(Trigger, "detach_collision_object")
 
-        self.client_attach_big_small = self.create_client(Trigger, "attach_collision_object_big_small")
-        self.client_detach_big_small = self.create_client(Trigger, "detach_collision_object_big_small")
+        self.client_attach_big_small = self.create_client(
+            Trigger, "attach_collision_object_big_small"
+        )
+        self.client_detach_big_small = self.create_client(
+            Trigger, "detach_collision_object_big_small"
+        )
 
-        self.client_clear_planning_scene = self.create_client(Trigger, "clear_planning_scene")
+        self.client_clear_planning_scene = self.create_client(
+            Trigger, "clear_planning_scene"
+        )
 
         self.client_fuse_pointcloud = self.create_client(PCLFuse, "pcl_fuse")
         self.client_camera_ik_joint_state = self.create_client(
             CameraIKJointState, "camera_joint_state_from_ik"
         )
 
-        self.client_ik_pass_count = self.create_client(
-            IKPassCount, "ik_pass_count"
-        )
+        self.client_ik_pass_count = self.create_client(IKPassCount, "ik_pass_count")
 
-        # Socket Client
-        self.client_ism = MyClient(
-            host="127.0.0.1", port=11111, client_name="Main ISM Client"
-        )
-        self.client_pem = MyClient(
-            host="127.0.0.1", port=22222, client_name="Main PEM Client"
-        )
+        # Welding
+        self.client_weld_pose = self.create_client(WeldPose, "compute_weld_poses")
 
         # Finish Init
         self.log("Main Node is Running. Ready for command.")
@@ -473,6 +472,9 @@ class MainNode(Node):
 
             self.log(self.data_pointcloud.width)
 
+            # WRT TO cam for Weld Pose
+            self.data_pointcloud_wrt_cam = msg
+
             if self.capture_to_fuse:
                 # Fuse Pointcloud
                 if self.is_empty(self.data_pointcloud_fused):
@@ -597,161 +599,6 @@ class MainNode(Node):
         self.capture_to_fuse = True
         self.command_capture(new_folder=new_folder)
 
-    ## CLIENT: ISM ########################################
-    def command_srv_req_ism(self):
-        if self.is_empty(self.data_array_rgb):
-            self.elog("No RGB Data.")
-            return
-        if self.is_empty(self.data_array_depth_fused):
-            self.elog("No Fused Depth.")
-            return
-
-        client_connected = self.client_ism.connect()
-        if not client_connected:
-            self.elog(f"Server ISM not started")
-            return
-
-        try:
-            self.req_ism_time = self.get_current_time()
-            target_obj = self.get_str_param("target_obj")
-
-            # Service Request
-            best_mask, best_box, best_score, combined_result = (
-                self.client_ism.request_msg(
-                    msg_type_in=["numpyarray", "numpyarray", "string", "string"],
-                    msg_in=[
-                        self.data_array_rgb,
-                        self.data_array_depth_fused,
-                        target_obj,
-                        self.get_str_param("dataset_path_prefix"),
-                    ],
-                )
-            )
-
-            # Save Best Mask
-            self.data_best_mask = best_mask
-            self.data_msg_best_mask = image_utils.mask_to_ros_image(self.data_best_mask)
-
-            # Save Image
-            image_utils.save_binary_mask(
-                mask=best_mask,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_best_mask_{target_obj}",
-            )
-            image_utils.save_rgb_image(
-                rgb_image=combined_result,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_ism_result_{target_obj}",
-            )
-
-            # Pub
-            self.pub_best_mask.publish(self.data_msg_best_mask)
-
-            self.log(f"Response Received from ISM with best score: {best_score}")
-        except Exception as e:
-            self.elog(f"Failed to send request: {e}")
-
-        self.client_ism.disconnect()
-        self.log(f"ISM Connection Closed.")
-
-    ## CLIENT: PEM ########################################
-    def command_srv_req_pem(self):
-        if self.is_empty(self.data_array_rgb) or self.is_empty(self.data_array_depth):
-            self.elog("No RGB or Depth Data. Capture First")
-            return
-        if self.is_empty(self.data_array_depth_fused):
-            self.elog("No Fused Depth.")
-            return
-
-        if self.is_empty(self.data_best_mask):
-            self.elog("No Best Mask. Req ISM First.")
-            return
-
-        client_connected = self.client_pem.connect()
-        if not client_connected:
-            self.elog(f"Server PEM not started")
-            return
-
-        try:
-            target_obj = self.get_str_param("target_obj")
-
-            # Service Request
-            result_rot, result_trans, result_image = self.client_pem.request_msg(
-                msg_type_in=[
-                    "numpyarray",
-                    "numpyarray",
-                    "numpyarray",
-                    "string",
-                    "string",
-                ],
-                msg_in=[
-                    self.data_best_mask,
-                    self.data_array_rgb,
-                    self.data_array_depth_fused,
-                    target_obj,
-                    self.get_str_param("dataset_path_prefix"),
-                ],
-            )
-
-            self.data_pem_result = result_image
-            self.data_msg_pem_result = image_utils.rgb_to_ros_image(
-                self.data_pem_result
-            )
-
-            # + 2 cm
-            # result_trans +=(result_trans /  np.linalg.norm(result_trans)) * 0.015
-            
-            # Object PoseStamped WRT Zed
-            self.data_object_pose_wrt_cam = utils.rotation_translation_to_posestamped(
-                rotation=result_rot,
-                translation=result_trans,
-                frame_id="zed_left_camera_optical_frame",
-            )
-
-            self.log(self.data_object_pose_wrt_cam)
-
-            # Transform to world
-            self.data_object_pose = utils.transform_pose_stamped(
-                self.tf_buffer,
-                self.data_object_pose_wrt_cam,
-                current_frame="zed_left_camera_optical_frame",
-                new_frame="world",
-            )
-
-            # Save Image
-            image_utils.save_rgb_image(
-                rgb_image=result_image,
-                output_dir=os.path.join(
-                    self.get_str_param("output_path_prefix"),
-                    self.node_run_folder_name,
-                    self.capture_folder_name,
-                ),
-                file_name=f"{self.req_ism_time}_pem_result_{target_obj}",
-            )
-
-            # Pub
-            self.pub_object_pose.publish(self.data_object_pose)
-            self.pub_pem_result.publish(self.data_msg_pem_result)
-
-            self.call_make_stl_collision()
-
-            self.log(f"Response Received from PEM")
-
-            # self.log(f"Response Received from ISM with best score: {best_score}")
-        except Exception as e:
-            self.elog(f"Failed to send request: {e}")
-
-        self.client_pem.disconnect()
-        self.log(f"PEM Connection Closed.")
-
     ## CLIENT: ALL_GRASP ########################################
     async def command_srv_all_grasp(self):
         if not self.client_all_grasp.wait_for_service(timeout_sec=3.0):
@@ -819,6 +666,90 @@ class MainNode(Node):
         self.pub_best_grasp_aim_poses.publish(self.data_sorted_grasp_aim_pose)
         self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
 
+    ## CLIENT: WELD POSE ########################################
+    async def command_weld_pose(self):
+        if not self.client_weld_pose.wait_for_service(timeout_sec=3.0):
+            self.elog("Service Weld Pose not available!")
+            return
+
+        if self.is_empty(self.data_pointcloud_wrt_cam):
+            self.elog("Cannot compute Welding Pose. Capture pointcloud first.")
+            return
+
+        self.log("Compute Welding Poses")
+
+        request = WeldPose.Request()
+        request.pointcloud = self.data_pointcloud_wrt_cam  # Correct field assignment
+
+        # Call
+        weld_pose_response = await self.call_service(self.client_weld_pose, request)
+
+        if not weld_pose_response:
+            self.log("No Welding Pose Received")
+            return
+        
+        # Response
+        self.data_sorted_grasp_aim_pose = utils.transform_pose_array(
+            self.tf_buffer,
+            weld_pose_response.poses,
+            current_frame="zed_left_camera_frame",
+            new_frame="world",
+        )
+        self.data_sorted_grasp_grip_pose = utils.transform_pose_array(
+            self.tf_buffer,
+            weld_pose_response.poses,
+            current_frame="zed_left_camera_frame",
+            new_frame="world",
+        )
+        self.data_sorted_grasp_gripper_distance = [
+            0.0 for i in self.data_sorted_grasp_aim_pose.poses
+        ]
+
+
+        # Aim offset
+        aim_offset = Pose()
+        aim_offset.position.z = -0.05  # 5 cm backward
+
+        grip_offset = Pose()
+        grip_offset.position.z = -0.05  # 5 cm backward
+
+        self.data_sorted_grasp_aim_pose.poses = [utils.chain_poses(aim_offset, p) for p in self.data_sorted_grasp_aim_pose.poses]
+        self.data_sorted_grasp_grip_pose.poses = [utils.chain_poses(grip_offset, p) for p in self.data_sorted_grasp_grip_pose.poses]
+
+
+        # Temp
+        flip_pose = Pose()
+        flip_pose.position.x = flip_pose.position.y = (
+            flip_pose.position.z
+        ) = 0.0
+        flip_pose.orientation.x = 0.0
+        flip_pose.orientation.y = 0.0
+        flip_pose.orientation.z = 1.0
+        flip_pose.orientation.w = 0.0
+
+        # aim_pose_world_flip = utils.chain_poses(
+        #     flip_pose, self.data_sorted_grasp_aim_pose.poses[0]
+        # )
+        self.data_sorted_grasp_aim_pose.poses = [self.data_sorted_grasp_aim_pose.poses[0], utils.chain_poses(
+            flip_pose, self.data_sorted_grasp_aim_pose.poses[-1]
+        )]
+        self.data_sorted_grasp_grip_pose.poses = [self.data_sorted_grasp_grip_pose.poses[-1], utils.chain_poses(
+            flip_pose, self.data_sorted_grasp_grip_pose.poses[0]
+        )]
+        self.data_sorted_grasp_gripper_distance = [0.0, 0.0]
+
+
+        num_passed_grasp = len(self.data_sorted_grasp_aim_pose.poses)
+
+        if num_passed_grasp == 0:
+            self.elog("No grasp passed criteria")
+            return
+
+        self.log(f"Received {num_passed_grasp} welding pose.")
+
+        self.pub_best_grasp_aim_poses.publish(self.data_sorted_grasp_aim_pose)
+        self.pub_best_grasp_grip_poses.publish(self.data_sorted_grasp_grip_pose)
+
     ## CLIENT: MAKE COLLISION ########################################
     async def command_srv_make_collision(self):
         if not self.client_make_collision.wait_for_service(timeout_sec=3.0):
@@ -828,12 +759,18 @@ class MainNode(Node):
         if self.is_empty(self.data_pointcloud):
             self.elog("Cannot make Collision. Capture pointcloud first.")
             return
-        
-        self.log("Attach Big Small Object")
-        self.service_trigger_and_wait(self.client_attach_big_small)
+
+        # self.log("Attach Big Small Object")
+        # self.service_trigger_and_wait(self.client_attach_big_small)
 
         request = PointCloudSend.Request()
-        request.pointcloud = self.data_pointcloud_fused  # Correct field assignment
+
+        if self.is_empty(self.data_pointcloud_fused):
+            request.pointcloud = self.data_pointcloud  # Correct field assignment
+        else:
+            request.pointcloud = self.data_pointcloud_fused
+
+
 
         # Call
         make_collision_response = await self.call_service(
@@ -841,11 +778,10 @@ class MainNode(Node):
         )
         if not make_collision_response:
             return
-        
 
-        self.log("Detach Big Small Object")
-        self.service_trigger_and_wait(self.client_detach_big_small)
-        
+        # self.log("Detach Big Small Object")
+        # self.service_trigger_and_wait(self.client_detach_big_small)
+
         # Response
         self.log(f"Make Collision Success")
 
@@ -1043,7 +979,7 @@ class MainNode(Node):
                 total_pass += 1
 
             # else:
-                # self.log(f"{i} Failed")
+            # self.log(f"{i} Failed")
 
         self.data_aim_joint_state_filter = filter_aim_joint_state
         self.data_sorted_grasp_aim_pose_filter = filter_sorted_aim_posearray
@@ -1066,9 +1002,9 @@ class MainNode(Node):
         request = AimGripPlan.Request()
         request.sorted_aim_poses = self.data_sorted_grasp_aim_pose_filter
         request.sorted_grip_poses = self.data_sorted_grasp_grip_pose_filter
-        self.log(str(request))
+        # self.log(str(request))
         request.aim_joint_states = self.data_aim_joint_state_filter
-        self.log(str(request))
+        # self.log(str(request))
 
         # Call
         aim_grip_plan_response = await self.call_service(
@@ -1121,6 +1057,7 @@ class MainNode(Node):
         self.service_trigger_and_wait(self.client_detach)
 
         ## CLIENT: DETACH OBJECT ###########################################
+
     def command_clear_planning_scene(self):
         self.log("Clear Planning Scene")
         self.service_trigger_and_wait(self.client_clear_planning_scene)
@@ -1170,9 +1107,7 @@ class MainNode(Node):
         request.pose_array = self.data_sorted_grasp_aim_pose
 
         # Call
-        await self.call_service(
-            self.client_ik_pass_count, request
-        )
+        await self.call_service(self.client_ik_pass_count, request)
 
         # self.data_pointcloud = fake_utils.get_random_pointcloud()
         # self.pub_captured_pointcloud.publish(self.data_pointcloud)

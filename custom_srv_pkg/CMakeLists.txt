@@ -39,6 +39,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/JointPose.srv"
   "srv/CameraIKJointState.srv"
   "srv/IKPassCount.srv"
+  "srv/WeldPose.srv"
+
 
 
 

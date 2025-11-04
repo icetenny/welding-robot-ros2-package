@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'kinematic_pkg'
+package_name = 'welding_pkg'
 
 setup(
     name=package_name,
@@ -11,12 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools',
-    'rclpy',
-    'geometry_msgs',
-    'tf2_ros',
-    'numpy',
-    'scipy',],
+    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='icetenny',
     maintainer_email='ice.tennison@gmail.com',
@@ -25,13 +20,11 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'endeffector_pubsub = kinematic_pkg.pos_endeffector_pub:main',
-            'joint_pos = kinematic_pkg.joint_pos:main',
-            'ik = kinematic_pkg.ik:main',
-            'ik_joint_pub = kinematic_pkg.ik_joint_pub:main',
-            'ik_server = kinematic_pkg.ik_server:main',
-            'ik_camera_pose_pub = kinematic_pkg.ik_camera_pose_pub:main',
-
+            'test = welding_pkg.test_node:main',
+            'pcl_to_path = welding_pkg.pcl_to_path:main',
+            'pcl_color_filter = welding_pkg.pcl_color_filter:main',
+            'welding_path_node = welding_pkg.welding_path_node:main',
+            'welding_pose_server = welding_pkg.welding_pose_server:main',
         ],
     },
 )

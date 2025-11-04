@@ -4,10 +4,9 @@ import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseStamped
+from main_pkg.utils import utils
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-
-from main_pkg.utils import utils
 
 
 class UR3eIKNode(Node):
@@ -15,7 +14,7 @@ class UR3eIKNode(Node):
         super().__init__('ur3e_ik_node')
         self.pose_sub = self.create_subscription(PoseStamped, 'end_effector_pose_from_joints',self.pose_callback, 10)
 
-        self.pose_pub_list = [self.create_publisher(PoseStamped, f'frame_{i}', 10) for i in list(range(7))]
+        self.pose_pub_list = [self.create_publisher(PoseStamped, f'frame_{i}', 10) for i in list(range(10))]
 
         self.get_logger().info("UR3e IK Node initialized")
 
@@ -27,7 +26,10 @@ class UR3eIKNode(Node):
             (0.0,        np.pi/2,  0.13105,  0.0    ),    # Wrist1 to Wrist2 (wrist_1_joint) 3
             (0.0,       -np.pi/2,  0.08535,  0.0    ),    # Wrist2 to Wrist3 (wrist_2_joint) 4
             (0.0,        0.0,      0.0921,   0.0    ),    # Wrist3 to tool0 (wrist_3_joint) 5
-            (0.0,        0.0,      0.15695, -np.pi/2)     # tool0 to end effector!!! 6
+            (0.0,        0.0,      0.15695, -np.pi/2),     # tool0 to end effector!!! 6
+            (0.0, 0.0, -0.03, 0),  # end to welder 7
+            (-0.044, 0.0, 0.226, 0.0), # welder to welder_middle 8
+            (0.0, -0.47, 0.0, np.pi/2) # welder_middle to welder_end 9
         ]
 
     def dh_matrix(self, a, alpha, d, theta):
@@ -47,7 +49,19 @@ class UR3eIKNode(Node):
     def pose_callback(self, msg:PoseStamped):
 
         # Note T_a_b = Frame a wrt to b, T_a = Frame a wrt 0
-        T_e = utils.posestamped_to_ht(msg)
+
+        T_weld_end = utils.posestamped_to_ht(msg)
+
+            # Step1: Find T_6, O_5 (don't care about orientation)
+            # T_e_6 = self.dh_matrix_joint(6)
+
+        T_e = (
+            T_weld_end
+            @ utils.inverse_ht(self.dh_matrix_joint(9))
+            @ utils.inverse_ht(self.dh_matrix_joint(8))
+            @ utils.inverse_ht(self.dh_matrix_joint(7))
+        )
+        # T_e = utils.posestamped_to_ht(msg)
 
         # Step1: Find T_6, O_5 (don't care about orientation)
         T_e_6 = self.dh_matrix_joint(6)
@@ -72,7 +86,7 @@ class UR3eIKNode(Node):
                 sin0 = math.sqrt(1- cos0**2)
                 theta0 = math.atan2(y5, x5) - math.atan2(combination[0] * sin0, cos0) + ALPHA0
 
-                print("TT0", theta0)
+                print(f"Theta0: {theta0}")
 
                 # Step3: Find p4
                 D4 = np.abs(self.dh_params[4][2])
@@ -95,6 +109,7 @@ class UR3eIKNode(Node):
                 n_y4 = combination[0] * np.cross(n_z4, n_p1_prime) / np.linalg.norm(np.cross(n_z4, n_p1_prime))
 
                 theta4 = math.atan2(np.dot(n_y4, (pe-p5)), np.dot(n_x4, (pe-p5)))
+                print(f"Theta4: {theta4}")
 
                 # print(n_x4, n_y4)
 
@@ -110,28 +125,31 @@ class UR3eIKNode(Node):
 
                 cos2_180 = (A1**2+A2**2-np.linalg.norm(p1_prime - p4)**2) / (2*A1*A2)
                 # print(cos2_180, A1, A2, np.linalg.norm(p1_prime - p4))
+                print(f"cos2_180 {cos2_180}")
                 sin2_180 = combination[2] * math.sqrt(1 - cos2_180**2)
+
+                print(f"sin2_180 {sin2_180}")
 
                 theta2 = np.pi - math.atan2(sin2_180, cos2_180)
 
+
+
+                print(f"Theta2: {theta2}")
 
                 n_p1_prime_y =  np.array([0,0,1])
                 angle0_to_4 = math.atan2(np.dot(p4,n_p1_prime_y), np.dot(p4, np.cross(n_p1_prime_y, n_p1_prime)))
 
                 theta1 = angle0_to_4 - math.atan2(A2*math.sin(theta2), A1+A2*math.cos(theta2)) - np.pi
+                print(f"Theta1: {theta1}")
 
                 theta3 = math.atan2(np.dot(p5, n_p1_prime_y), np.dot(p5, np.cross(n_p1_prime_y, n_p1_prime))) - theta1 - theta2
+                print(f"Theta3: {theta3}")
             
 
                 # print(theta0, p4, n_x4, theta4)
                 print("Alpha: ", angle0_to_4)
 
-                
-                print(f"Theta0: {theta0}")
-                print(f"Theta1: {theta1}")
-                print(f"Theta2: {theta2}")
-                print(f"Theta3: {theta3}")
-                print(f"Theta4: {theta4}")
+            
                 print()
 
             except:
@@ -140,6 +158,12 @@ class UR3eIKNode(Node):
 
 
         # print(T_e_6, utils.inverse_ht(T_e_6), "\n\n")
+
+        self.pose_pub_list[9].publish(utils.ht_to_posestamped(ht=T_weld_end, frame_id="base"))
+
+
+        self.pose_pub_list[7].publish(utils.ht_to_posestamped(ht=T_e, frame_id="base"))
+
 
         self.pose_pub_list[6].publish(utils.ht_to_posestamped(ht=T_6, frame_id="base"))
         self.pose_pub_list[5].publish(utils.ht_to_posestamped(ht=O_5, frame_id="base"))

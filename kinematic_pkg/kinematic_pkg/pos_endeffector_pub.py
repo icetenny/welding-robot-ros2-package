@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-
 import numpy as np
+import rclpy
 import tf2_ros
-
 from geometry_msgs.msg import Pose
+from rclpy.node import Node
 from std_msgs.msg import String
 
 
@@ -90,7 +88,7 @@ class UR3eDHExtractor(Node):
             # 1) lookup dynamic "/tf" link
             #self.get_logger().info("TF frames:\n" + self.tf_buffer.all_frames_as_string()) 
             
-            t1 = self.tf_buffer.lookup_transform('base', 'tool0_controller', rclpy.time.Time())  # Corrected frame names
+            t1 = self.tf_buffer.lookup_transform('base', 'tool0', rclpy.time.Time())  # Corrected frame names
             t2 = self.tf_buffer.lookup_transform('tool0', 'robotiq_hande_coupler', rclpy.time.Time())
             t3 = self.tf_buffer.lookup_transform('robotiq_hande_coupler', 'robotiq_hande_link', rclpy.time.Time())
             t4 = self.tf_buffer.lookup_transform('robotiq_hande_link', 'robotiq_hande_end', rclpy.time.Time())
@@ -122,6 +120,9 @@ class UR3eDHExtractor(Node):
             pose.orientation.y = float(quat[1])
             pose.orientation.z = float(quat[2])
             pose.orientation.w = float(quat[3])
+
+            self.get_logger().info("Publishing Pose")
+
             self.pose_pub.publish(pose)
             
         except Exception as e:

@@ -1,10 +1,9 @@
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from main_pkg.utils import utils
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-
-from main_pkg.utils import utils
 
 
 class UR3eFKNode(Node):
@@ -23,7 +22,10 @@ class UR3eFKNode(Node):
             (0.0,        np.pi/2,  0.13105,  0.0    ),    # Wrist1 to Wrist2 (wrist_1_joint)
             (0.0,       -np.pi/2,  0.08535,  0.0    ),    # Wrist2 to Wrist3 (wrist_2_joint)
             (0.0,        0.0,      0.0921,   0.0    ),    # Wrist3 to tool0 (wrist_3_joint)
-            (0.0,        0.0,      0.15695, -np.pi/2)     # tool0 to end effector!!!
+            (0.0,        0.0,      0.15695, -np.pi/2),     # tool0 to end effector!!!
+            (0.0, 0.0, -0.03, 0),  # end to welder 7
+            (-0.044, 0.0, 0.226, 0.0), # welder to welder_middle
+            (0.0, -0.47, 0.0, np.pi/2) # welder_middle to welder_end
         ]
 
     def dh_matrix(self, a, alpha, d, theta):
@@ -46,7 +48,11 @@ class UR3eFKNode(Node):
                 joint_map['wrist_1_joint'],
                 joint_map['wrist_2_joint'],
                 joint_map['wrist_3_joint'],
-                0.0 #joint_map['ee']
+                0.0, #joint_map['ee']
+                0.0,
+                0.0,
+                0.0,
+                0.0
             ]
         except KeyError as e:
             self.get_logger().warn(f"Missing joint in joint_states: {e}")
@@ -56,7 +62,7 @@ class UR3eFKNode(Node):
         joint_pose_array = PoseArray()
         joint_pose_array.header.frame_id = "base"
         T = np.eye(4)
-        for i in range(7):
+        for i in range(7 + 3):
             a, alpha, d, theta_offset = self.dh_params[i]
             theta = joint_angles[i] + theta_offset
             T_i = self.dh_matrix(a, alpha, d, theta)

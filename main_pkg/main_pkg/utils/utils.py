@@ -3,7 +3,7 @@ from collections import defaultdict
 import numpy as np
 import rclpy
 import sensor_msgs_py.point_cloud2 as pc2
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from scipy.spatial.transform import Rotation
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import PointCloud2, PointField
@@ -277,6 +277,53 @@ def transform_pose(
 
     return transformed
 
+
+def transform_pose_array(tf_buffer: Buffer,
+    pose_array_msg: PoseArray,
+    current_frame: str,
+    new_frame: str,
+) -> PoseArray | None:
+    
+    try:
+        tf = tf_buffer.lookup_transform(
+            new_frame,  # target
+            current_frame,  # source
+            rclpy.time.Time(),  # latest available
+            rclpy.duration.Duration(seconds=0.5),
+        )
+    except TransformException as ex:
+        print(f"Could not get transform from {current_frame} to {new_frame}: {ex}")
+        return None
+    
+    t = np.eye(4, dtype=np.float64)
+    q_tf = tf.transform.rotation
+    p_tf = tf.transform.translation
+    t[:3, :3] = R.from_quat([q_tf.x, q_tf.y, q_tf.z, q_tf.w]).as_matrix()
+    t[:3, 3]  = [p_tf.x, p_tf.y, p_tf.z]
+
+    r_tf = R.from_quat([q_tf.x, q_tf.y, q_tf.z, q_tf.w])
+
+    out = PoseArray()
+    out.header = pose_array_msg.header
+    out.header.frame_id = new_frame
+
+    for pose in pose_array_msg.poses:
+        # position
+        px, py, pz = pose.position.x, pose.position.y, pose.position.z
+        pos_out = (t @ np.array([px, py, pz, 1.0]))[:3]
+
+        # orientation: q_out = q_tf ⊗ q_pose (scipy: r_tf * r_pose)
+        q_pose = pose.orientation
+        r_pose = R.from_quat([q_pose.x, q_pose.y, q_pose.z, q_pose.w])
+        r_out  = r_tf * r_pose
+        q_out  = r_out.as_quat()  # [x, y, z, w]
+
+        p = Pose()
+        p.position.x, p.position.y, p.position.z = pos_out[0], pos_out[1], pos_out[2]
+        p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = q_out[0], q_out[1], q_out[2], q_out[3]
+        out.poses.append(p)
+
+    return out
 
 def chain_poses(
     pose_obj_wrt_frame1: Pose | PoseStamped,

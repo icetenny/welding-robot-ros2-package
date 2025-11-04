@@ -1,16 +1,15 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>kinematic_pkg</name>
+  <name>welding_pkg</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="ice.tennison@gmail.com">icetenny</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
-  <depend>custom_srv_pkg</depend>
-  <depend>sensor_msgs</depend>
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

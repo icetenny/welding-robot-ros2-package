@@ -64,9 +64,16 @@ ament_target_dependencies(trigger_server rclcpp std_srvs)
 add_executable(trigger_client src/trigger_client.cpp)
 ament_target_dependencies(trigger_client rclcpp std_srvs)
 
+add_executable(welding_robot_server_node src/welding_robot_server_node.cpp)
+target_include_directories(welding_robot_server_node  PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(welding_robot_server_node PUBLIC c_std_99 cxx_std_17)
+ament_target_dependencies(welding_robot_server_node custom_srv_pkg std_srvs rclcpp geometry_msgs moveit_ros_planning_interface moveit_visual_tools)
+
 
 # Install Targets
-install(TARGETS add_collision_object move_robot robot_server echo_pose trigger_server trigger_client robot_server_node
+install(TARGETS add_collision_object move_robot robot_server echo_pose trigger_server trigger_client robot_server_node welding_robot_server_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS

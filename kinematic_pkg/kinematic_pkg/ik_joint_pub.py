@@ -4,11 +4,10 @@ import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from main_pkg.utils import utils
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-
-from main_pkg.utils import utils
 
 
 class UR3eIKNode(Node):
@@ -40,7 +39,7 @@ class UR3eIKNode(Node):
         ]
 
         self.pose_pub_list = [
-            self.create_publisher(PoseStamped, f"frame_{i}", 10) for i in list(range(7))
+            self.create_publisher(PoseStamped, f"frame_{i}", 10) for i in list(range(10))
         ]
 
         self.capture = False
@@ -60,6 +59,9 @@ class UR3eIKNode(Node):
             (0.0, -np.pi / 2, 0.08535, 0.0),  # Wrist2 to Wrist3 (wrist_2_joint) 4
             (0.0, 0.0, 0.0921, 0.0),  # Wrist3 to tool0 (wrist_3_joint) 5
             (0.0, 0.0, 0.15695, -np.pi / 2),  # tool0 to end effector!!! 6
+            (0.0, 0.0, -0.03, 0.0), # end to welder 7
+            (-0.044, 0.0, 0.226, 0.0), # welder to welder_middle 8
+            (0.0, -0.47, 0.0, np.pi/2) # welder_middle to welder_end 9
         ]
 
     def dh_matrix(self, a, alpha, d, theta):
@@ -90,6 +92,8 @@ class UR3eIKNode(Node):
     def command_callback(self, msg: String):
         command = msg.data
 
+        print("Receive Command:", command)
+
         if command == "capture":
             self.all_joint_msg_list = []
             self.var_list = []
@@ -104,21 +108,21 @@ class UR3eIKNode(Node):
                 self.pub_joint_state_robot1.publish(msg_to_pub)
                 print(msg_to_pub)
 
-                # p4, p1_prime, p2_prime = self.var_list[self.current_joint_state_index]
-                # self.pose_pub_list[4].publish(
-                #     utils.point_to_posestamped(point=p4, frame_id="base")
-                # )
-                # self.pose_pub_list[1].publish(
-                #     utils.point_to_posestamped(point=p1_prime, frame_id="base")
-                # )
+                p4, p1_prime, p2_prime = self.var_list[self.current_joint_state_index]
+                self.pose_pub_list[4].publish(
+                    utils.point_to_posestamped(point=p4, frame_id="base")
+                )
+                self.pose_pub_list[1].publish(
+                    utils.point_to_posestamped(point=p1_prime, frame_id="base")
+                )
 
-                # self.pose_pub_list[2].publish(
-                #     utils.point_to_posestamped(point=p2_prime, frame_id="base")
-                # )
-                # print()
-                # print(f"p4: {p4}")
-                # print(f"p1_prime: {p1_prime}")
-                # print()
+                self.pose_pub_list[2].publish(
+                    utils.point_to_posestamped(point=p2_prime, frame_id="base")
+                )
+                print()
+                print(f"p4: {p4}")
+                print(f"p1_prime: {p1_prime}")
+                print()
 
                 joint_pose_array = PoseArray()
                 joint_pose_array.header.frame_id = "base"
@@ -145,7 +149,18 @@ class UR3eIKNode(Node):
         if self.capture:
             self.capture = False
             # Note T_a_b = Frame a wrt to b, T_a = Frame a wrt 0
-            T_e = utils.posestamped_to_ht(msg)
+            T_weld_end = utils.posestamped_to_ht(msg)
+
+            # Step1: Find T_6, O_5 (don't care about orientation)
+            # T_e_6 = self.dh_matrix_joint(6)
+
+            T_e = (
+                T_weld_end
+                @ utils.inverse_ht(self.dh_matrix_joint(9))
+                @ utils.inverse_ht(self.dh_matrix_joint(8))
+                @ utils.inverse_ht(self.dh_matrix_joint(7))
+            )
+            # T_e = utils.posestamped_to_ht(msg)
 
             # Step1: Find T_6, O_5 (don't care about orientation)
             T_e_6 = self.dh_matrix_joint(6)
@@ -175,6 +190,9 @@ class UR3eIKNode(Node):
 
             combinations = list(itertools.product([1, -1], repeat=3))
             for combination in combinations:
+
+                p4, p1_prime, p2_prime = [np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]) , np.array([0.0, 0.0, 0.0])]
+
                 print(f"Combination: {combination}")
                 try:
 
@@ -232,13 +250,30 @@ class UR3eIKNode(Node):
                     p1 = np.array([0, 0, D0])
                     p1_prime = p1 + D3 * n_p1_prime
 
+
+
+                    # p4, p1_prime, p2_prime = self.var_list[self.current_joint_state_index]
+                    # self.pose_pub_list[4].publish(
+                    #     utils.point_to_posestamped(point=p4, frame_id="base")
+                    # )
+                    # self.pose_pub_list[1].publish(
+                    #     utils.point_to_posestamped(point=p1_prime, frame_id="base")
+                    # )
+
+
                     print("p4: ", p4)
+                    print(f"p1_prime: {p1_prime}")
 
                     cos2_180 = (
                         A1**2 + A2**2 - np.linalg.norm(p1_prime - p4) ** 2
                     ) / (2 * A1 * A2)
                     # print(cos2_180, A1, A2, np.linalg.norm(p1_prime - p4))
+
+                    print(f"cos2_180 {cos2_180}")
+
                     sin2_180 = combination[2] * math.sqrt(1 - cos2_180**2)
+                    print(f"sin2_180 {sin2_180}")
+
 
                     theta2 = np.pi - math.atan2(sin2_180, cos2_180)
 
@@ -266,6 +301,10 @@ class UR3eIKNode(Node):
                         / np.linalg.norm(np.cross(n_p1_prime_y, n_p1_prime))
                         + A1 * math.sin(theta1) * n_p1_prime_y
                         + p1_prime
+                    )
+
+                    self.pose_pub_list[2].publish(
+                        utils.point_to_posestamped(point=p2_prime, frame_id="base")
                     )
 
                     n_y3 = (p2_prime - p4) / np.linalg.norm(p2_prime - p4)
@@ -327,9 +366,10 @@ class UR3eIKNode(Node):
                     msg.position = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
                     self.all_joint_msg_list.append(msg)
-                    self.var_list.append(
-                        [np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]) , np.array([0.0, 0.0, 0.0])]
-                    )
+                    self.var_list.append([p4, p1_prime, p2_prime])
+
+                    # self.var_list.append(
+                    # )
             print("==============")
 
             # print(T_e_6, utils.inverse_ht(T_e_6), "\n\n")

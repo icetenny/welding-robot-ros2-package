@@ -3,21 +3,20 @@ import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped
-from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
-from moveit_msgs.srv import GetPlanningScene
-from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from std_msgs.msg import String
-from tf2_ros import Buffer, TransformListener
-
 from custom_srv_pkg.srv import (
     CameraIKJointState,
     IKJointState,
     IKPassCount,
     JointStateCollisionBool,
 )
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from main_pkg.utils import utils
+from moveit_msgs.msg import CollisionObject, PlanningScene, PlanningSceneComponents
+from moveit_msgs.srv import GetPlanningScene
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+from std_msgs.msg import String
+from tf2_ros import Buffer, TransformListener
 
 
 class UR3eIKNode(Node):
@@ -84,6 +83,10 @@ class UR3eIKNode(Node):
             (0.0, -np.pi / 2, 0.08535, 0.0),  # Wrist2 to Wrist3 (wrist_2_joint) 4
             (0.0, 0.0, 0.0921, 0.0),  # Wrist3 to tool0 (wrist_3_joint) 5
             (0.0, 0.0, 0.15695, -np.pi / 2),  # tool0 to end effector!!! 6
+
+            (0.0, 0.0, -0.03, 0.0), # end to welder 7
+            (-0.052, 0.0, 0.241, 0.0), # welder to welder_middle
+            (0.0, -0.47, 0.0, np.pi/2) # welder_middle to welder_end
         ]
 
     def dh_matrix(self, a, alpha, d, theta):
@@ -157,12 +160,19 @@ class UR3eIKNode(Node):
         try:
 
             # Note T_a_b = Frame a wrt to b, T_a = Frame a wrt 0
-            T_e = utils.posestamped_to_ht(pose_wrt_base)
+            T_weld_end = utils.posestamped_to_ht(pose_wrt_base)
 
             # Step1: Find T_6, O_5 (don't care about orientation)
-            T_e_6 = self.dh_matrix_joint(6)
+            # T_e_6 = self.dh_matrix_joint(6)
 
-            T_6 = T_e @ utils.inverse_ht(T_e_6)
+            T_e = (
+                T_weld_end
+                @ utils.inverse_ht(self.dh_matrix_joint(9))
+                @ utils.inverse_ht(self.dh_matrix_joint(8))
+                @ utils.inverse_ht(self.dh_matrix_joint(7))
+            )
+
+            T_6 = T_e @ utils.inverse_ht(self.dh_matrix_joint(6))
 
             T_6_5_zero_joint = self.dh_matrix_joint(5)
             O_5 = T_6 @ utils.inverse_ht(T_6_5_zero_joint)
@@ -353,55 +363,55 @@ class UR3eIKNode(Node):
                         response.possible_grip_joint_state.append(msg_grip)
 
                         # Flip Last Joint ##############################
-                        aim_joint_state_by_ik_flip = aim_joint_state_by_ik.copy()
-                        grip_joint_state_by_ik_flip = grip_joint_state_by_ik.copy()
+                        # aim_joint_state_by_ik_flip = aim_joint_state_by_ik.copy()
+                        # grip_joint_state_by_ik_flip = grip_joint_state_by_ik.copy()
 
-                        if aim_joint_state_by_ik_flip[5] > 0:
-                            aim_joint_state_by_ik_flip[5] -= np.pi
-                            grip_joint_state_by_ik_flip[5] -= np.pi
-                        else:
-                            aim_joint_state_by_ik_flip[5] += np.pi
-                            grip_joint_state_by_ik_flip[5] += np.pi
+                        # if aim_joint_state_by_ik_flip[5] > 0:
+                        #     aim_joint_state_by_ik_flip[5] -= np.pi
+                        #     grip_joint_state_by_ik_flip[5] -= np.pi
+                        # else:
+                        #     aim_joint_state_by_ik_flip[5] += np.pi
+                        #     grip_joint_state_by_ik_flip[5] += np.pi
 
-                        # Output Joint with offset
-                        msg_aim_flip = JointState()
-                        msg_aim_flip.name = self.joint_names
+                        # # Output Joint with offset
+                        # msg_aim_flip = JointState()
+                        # msg_aim_flip.name = self.joint_names
 
-                        # Get nearest joint rotation based on current joint state
-                        nearest_aim_joint_state_by_ik_flip = self.make_nearest_joint_state_rotation(
-                            starting_joint_state=request.current_joint_state.position,
-                            target_joint_state=aim_joint_state_by_ik_flip,
-                        )
-                        msg_aim_flip.position = nearest_aim_joint_state_by_ik_flip
+                        # # Get nearest joint rotation based on current joint state
+                        # nearest_aim_joint_state_by_ik_flip = self.make_nearest_joint_state_rotation(
+                        #     starting_joint_state=request.current_joint_state.position,
+                        #     target_joint_state=aim_joint_state_by_ik_flip,
+                        # )
+                        # msg_aim_flip.position = nearest_aim_joint_state_by_ik_flip
 
-                        response.possible_aim_joint_state.append(msg_aim_flip)
-                        response.gripper_distance.append(gripper_distance)
+                        # response.possible_aim_joint_state.append(msg_aim_flip)
+                        # response.gripper_distance.append(gripper_distance)
 
-                        # Flip Pose
-                        flip_pose = Pose()
-                        flip_pose.position.x = flip_pose.position.y = (
-                            flip_pose.position.z
-                        ) = 0.0
-                        flip_pose.orientation.x = 0.0
-                        flip_pose.orientation.y = 0.0
-                        flip_pose.orientation.z = 1.0
-                        flip_pose.orientation.w = 0.0
+                        # # Flip Pose
+                        # flip_pose = Pose()
+                        # flip_pose.position.x = flip_pose.position.y = (
+                        #     flip_pose.position.z
+                        # ) = 0.0
+                        # flip_pose.orientation.x = 0.0
+                        # flip_pose.orientation.y = 0.0
+                        # flip_pose.orientation.z = 1.0
+                        # flip_pose.orientation.w = 0.0
 
-                        aim_pose_world_flip = utils.chain_poses(
-                            flip_pose, aim_pose_world
-                        )
-                        grip_pose_world_flip = utils.chain_poses(
-                            flip_pose, grip_pose_world
-                        )
+                        # aim_pose_world_flip = utils.chain_poses(
+                        #     flip_pose, aim_pose_world
+                        # )
+                        # grip_pose_world_flip = utils.chain_poses(
+                        #     flip_pose, grip_pose_world
+                        # )
 
-                        response.sorted_aim_poses.poses.append(aim_pose_world_flip)
-                        response.sorted_grip_poses.poses.append(grip_pose_world_flip)
+                        # response.sorted_aim_poses.poses.append(aim_pose_world_flip)
+                        # response.sorted_grip_poses.poses.append(grip_pose_world_flip)
 
-                        # Grip Joint State
-                        msg_grip_flip = JointState()
-                        msg_grip_flip.name = self.joint_names
-                        msg_grip_flip.position = grip_joint_state_by_ik_flip
-                        response.possible_grip_joint_state.append(msg_grip_flip)
+                        # # Grip Joint State
+                        # msg_grip_flip = JointState()
+                        # msg_grip_flip.name = self.joint_names
+                        # msg_grip_flip.position = grip_joint_state_by_ik_flip
+                        # response.possible_grip_joint_state.append(msg_grip_flip)
 
             # print("==============")
 

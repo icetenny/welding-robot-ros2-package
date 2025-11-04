@@ -4,11 +4,10 @@ import math
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from main_pkg.utils import utils
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-
-from main_pkg.utils import utils
 
 
 class UR3eIKNode(Node):
